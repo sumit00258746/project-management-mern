@@ -12,7 +12,12 @@ const syncUserCreation = inngest.createFunction(
     },
   },
   async ({ event }) => {
-    const { data } = event.data;
+    console.log("Inngest clerk/user.created event:", event);
+    const payload = event?.data ?? event;
+    const data = payload?.data ?? payload;
+    if (!data || typeof data !== "object") {
+      throw new Error("Missing event data for clerk/user.created");
+    }
     await prisma.user.create({
       data: {
         id: data.id,
@@ -31,7 +36,12 @@ const syncUserDeletion = inngest.createFunction(
     },
   },
   async ({ event }) => {
-    const { data } = event.data;
+    console.log("Inngest clerk/user.deleted event:", event);
+    const payload = event?.data ?? event;
+    const data = payload?.data ?? payload;
+    if (!data || typeof data !== "object") {
+      throw new Error("Missing event data for clerk/user.deleted");
+    }
     await prisma.user.delete({
       where: {
         id: data.id,
@@ -47,7 +57,12 @@ const syncUserUpdation = inngest.createFunction(
     },
   },
   async ({ event }) => {
-    const { data } = event.data;
+    console.log("Inngest clerk/user.updated event:", event);
+    const payload = event?.data ?? event;
+    const data = payload?.data ?? payload;
+    if (!data || typeof data !== "object") {
+      throw new Error("Missing event data for clerk/user.updated");
+    }
     await prisma.user.update({
       where: {
         id: data.id,
