@@ -18,12 +18,18 @@ const syncUserCreation = inngest.createFunction(
     if (!data || typeof data !== "object") {
       throw new Error("Missing event data for clerk/user.created");
     }
-    await prisma.user.create({
-      data: {
+    await prisma.user.upsert({
+      where: { id: data.id },
+      create: {
         id: data.id,
-        name: data?.first_name + " " + data?.last_name,
-        email: data?.email_addresses[0]?.email_address,
-        image: data.image_url,
+        name: `${data?.first_name ?? ""} ${data?.last_name ?? ""}`.trim(),
+        email: data?.email_addresses?.[0]?.email_address ?? "",
+        image: data.image_url ?? "",
+      },
+      update: {
+        name: `${data?.first_name ?? ""} ${data?.last_name ?? ""}`.trim(),
+        email: data?.email_addresses?.[0]?.email_address ?? "",
+        image: data.image_url ?? "",
       },
     });
   },
