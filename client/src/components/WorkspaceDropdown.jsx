@@ -1,22 +1,52 @@
 import { useState, useRef, useEffect } from "react";
 import { ChevronDown, Check, Plus } from "lucide-react";
 import { useDispatch, useSelector } from "react-redux";
-import { setCurrentWorkspace } from "../features/workspaceSlice";
+import { setCurrentWorkspace, syncClerkWorkspace } from "../features/workspaceSlice";
 import { useNavigate } from "react-router-dom";
-import { dummyWorkspaces } from "../assets/assets";
+import { useAuth, useClerk, useOrganizationList, useUser } from "@clerk/react";
 
 function WorkspaceDropdown() {
+
+    const { setActive, userMemberships, isLoaded } = useOrganizationList({
+        userMemberships: true,
+    })
+
+    const { openCreateOrganization } = useClerk()
+    const { getToken } = useAuth()
+    const { user } = useUser()
 
     const { workspaces } = useSelector((state) => state.workspace);
     const currentWorkspace = useSelector((state) => state.workspace?.currentWorkspace || null);
     const [isOpen, setIsOpen] = useState(false);
     const dropdownRef = useRef(null);
+    const lastActiveOrganizationIdRef = useRef(null);
 
     const dispatch = useDispatch();
     const navigate = useNavigate();
 
-    const onSelectWorkspace = (organizationId) => {
-        dispatch(setCurrentWorkspace(organizationId))
+    const onSelectWorkspace = async (organization) => {
+        if (currentWorkspace?.id === organization.id) {
+            setIsOpen(false);
+            return;
+        }
+
+        await setActive({ organization: organization.id });
+        lastActiveOrganizationIdRef.current = organization.id;
+
+        const knownWorkspace = workspaces.some((workspace) => workspace.id === organization.id);
+        if (!knownWorkspace) {
+            await dispatch(syncClerkWorkspace({
+                getToken,
+                organization,
+                user: {
+                    fullName: user?.fullName,
+                    email: user?.primaryEmailAddress?.emailAddress,
+                    imageUrl: user?.imageUrl,
+                },
+            })).unwrap()
+        }
+
+        dispatch(setCurrentWorkspace(organization.id))
         setIsOpen(false);
         navigate('/')
     }
@@ -32,6 +62,16 @@ function WorkspaceDropdown() {
         return () => document.removeEventListener("mousedown", handleClickOutside);
     }, []);
 
+    useEffect(() => {
+        if (
+            currentWorkspace &&
+            isLoaded &&
+            lastActiveOrganizationIdRef.current !== currentWorkspace.id
+        ) {
+            lastActiveOrganizationIdRef.current = currentWorkspace.id;
+            setActive({ organization: currentWorkspace.id });
+        }
+    }, [currentWorkspace, isLoaded, setActive])
     return (
         <div className="relative m-4" ref={dropdownRef}>
             <button onClick={() => setIsOpen(prev => !prev)} className="w-full flex items-center justify-between p-3 h-auto text-left rounded hover:bg-gray-100 dark:hover:bg-zinc-800" >
@@ -55,9 +95,9 @@ function WorkspaceDropdown() {
                         <p className="text-xs text-gray-500 dark:text-zinc-400 uppercase tracking-wider mb-2 px-2">
                             Workspaces
                         </p>
-                        {dummyWorkspaces.map((ws) => (
-                            <div key={ws.id} onClick={() => onSelectWorkspace(ws.id)} className="flex items-center gap-3 p-2 cursor-pointer rounded hover:bg-gray-100 dark:hover:bg-zinc-800" >
-                                <img src={ws.image_url} alt={ws.name} className="w-6 h-6 rounded" />
+                        {(userMemberships.data || []).map(({ organization: ws }) => (
+                            <div key={ws.id} onClick={() => onSelectWorkspace(ws)} className="flex items-center gap-3 p-2 cursor-pointer rounded hover:bg-gray-100 dark:hover:bg-zinc-800" >
+                                <img src={ws.imageUrl} alt={ws.name} className="w-6 h-6 rounded" />
                                 <div className="flex-1 min-w-0">
                                     <p className="text-sm font-medium text-gray-800 dark:text-white truncate">
                                         {ws.name}
@@ -75,7 +115,7 @@ function WorkspaceDropdown() {
 
                     <hr className="border-gray-200 dark:border-zinc-700" />
 
-                    <div className="p-2 cursor-pointer rounded group hover:bg-gray-100 dark:hover:bg-zinc-800" >
+                    <div onClick={() => { openCreateOrganization({ afterCreateOrganizationUrl: "/" }); setIsOpen(false) }} className="p-2 cursor-pointer rounded group hover:bg-gray-100 dark:hover:bg-zinc-800" >
                         <p className="flex items-center text-xs gap-2 my-1 w-full text-blue-600 dark:text-blue-400 group-hover:text-blue-500 dark:group-hover:text-blue-300">
                             <Plus className="w-4 h-4" /> Create Workspace
                         </p>
