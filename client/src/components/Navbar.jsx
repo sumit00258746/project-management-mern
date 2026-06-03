@@ -43,6 +43,7 @@ const Navbar = ({ setIsSidebarOpen }) => {
                         }
                     </button>
 
+
                     {/* User Button */}
                     <UserButton />
                 </div>
