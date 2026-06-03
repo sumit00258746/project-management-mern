@@ -18,10 +18,10 @@ export const fetchWorkspaces = createAsyncThunk(
 
 export const syncClerkWorkspace = createAsyncThunk(
   "workspace/syncClerkWorkspace",
-  async ({ getToken, organization, user }) => {
+  async ({ getToken, organization, user, role }) => {
     const { data } = await api.post(
       "/api/workspaces/sync-clerk",
-      { organization, user },
+      { organization, user, role },
       {
         headers: { Authorization: `Bearer ${await getToken()}` },
       },

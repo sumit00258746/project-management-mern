@@ -1,19 +1,165 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Mail, UserPlus } from "lucide-react";
-import { useSelector } from "react-redux";
+import { useDispatch, useSelector } from "react-redux";
+import { useAuth, useOrganization, useOrganizationList } from "@clerk/react"
+import toast from "react-hot-toast";
+import api from "../configs/api";
+import { fetchWorkspaces } from "../features/workspaceSlice";
+
 
 const InviteMemberDialog = ({ isDialogOpen, setIsDialogOpen }) => {
-
+    const { organization, isLoaded: isOrganizationLoaded } = useOrganization();
+    const { setActive, isLoaded: isOrganizationListLoaded } = useOrganizationList();
+    const { getToken } = useAuth();
+    const dispatch = useDispatch();
     const currentWorkspace = useSelector((state) => state.workspace?.currentWorkspace || null);
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [isAligningWorkspace, setIsAligningWorkspace] = useState(false);
     const [formData, setFormData] = useState({
         email: "",
         role: "org:member",
     });
 
+    useEffect(() => {
+        if (!isDialogOpen || !currentWorkspace?.id || !isOrganizationListLoaded) {
+            return;
+        }
+
+        if (organization?.id === currentWorkspace.id) {
+            return;
+        }
+
+        let isCancelled = false;
+        const alignActiveOrganization = async () => {
+            setIsAligningWorkspace(true);
+            console.debug("[invite:phase-0-align-active-org:start]", {
+                selectedWorkspaceId: currentWorkspace.id,
+                activeOrganizationId: organization?.id,
+            });
+
+            try {
+                await setActive({ organization: currentWorkspace.id });
+                console.debug("[invite:phase-0-align-active-org:success]", {
+                    selectedWorkspaceId: currentWorkspace.id,
+                });
+            } catch (err) {
+                console.error("[invite:phase-0-align-active-org:error]", err);
+                toast.error(err.message || "Unable to select this workspace in Clerk");
+            } finally {
+                if (!isCancelled) {
+                    setIsAligningWorkspace(false);
+                }
+            }
+        };
+
+        alignActiveOrganization();
+
+        return () => {
+            isCancelled = true;
+        };
+    }, [currentWorkspace?.id, isDialogOpen, isOrganizationListLoaded, organization?.id, setActive]);
+
     const handleSubmit = async (e) => {
         e.preventDefault();
+        setIsSubmitting(true);
+        try {
+            const email = formData.email.trim().toLowerCase();
 
+            console.debug("[invite:phase-1-click]", {
+                email,
+                role: formData.role,
+                selectedWorkspaceId: currentWorkspace?.id,
+                activeOrganizationId: organization?.id,
+            });
+
+            if (!currentWorkspace?.id) {
+                throw new Error("No workspace selected");
+            }
+
+            if (!isOrganizationLoaded || !organization?.id) {
+                throw new Error("Clerk organization is still loading");
+            }
+
+            if (organization.id !== currentWorkspace.id) {
+                throw new Error("Selected workspace and active Clerk organization are not synced yet");
+            }
+
+            try {
+                const invitation = await organization.inviteMember({ emailAddress: email, role: formData.role })
+                console.debug("[invite:phase-2-clerk-invitation-created]", {
+                    invitationId: invitation?.id,
+                    invitationStatus: invitation?.status,
+                    organizationId: organization.id,
+                    email,
+                });
+            } catch (inviteErr) {
+                const inviteMessage = inviteErr?.errors?.[0]?.longMessage || inviteErr?.errors?.[0]?.message || inviteErr.message || "";
+                const canContinueWithLocalAdd =
+                    inviteMessage.toLowerCase().includes("already") ||
+                    inviteMessage.toLowerCase().includes("invitation");
+
+                console.warn("[invite:phase-2-clerk-invitation-not-created]", {
+                    organizationId: organization.id,
+                    email,
+                    message: inviteMessage,
+                    continuingToLocalAdd: canContinueWithLocalAdd,
+                });
+
+                if (!canContinueWithLocalAdd) {
+                    throw inviteErr;
+                }
+            }
+
+            try {
+                const localRole = formData.role === "org:admin" ? "ADMIN" : "MEMBER";
+                const { data: localMember } = await api.post(
+                    "/api/workspaces/add-member",
+                    {
+                        workspaceId: currentWorkspace.id,
+                        email,
+                        role: localRole,
+                    },
+                    {
+                        headers: { Authorization: `Bearer ${await getToken()}` },
+                    }
+                );
+
+                console.debug("[invite:phase-3-local-workspace-member-created]", {
+                    workspaceId: currentWorkspace.id,
+                    userId: localMember?.userId,
+                    role: localMember?.role,
+                });
+
+                await dispatch(fetchWorkspaces({ getToken })).unwrap();
+                toast.success("Invitation sent and member added to workspace");
+            } catch (localErr) {
+                const status = localErr?.response?.status;
+                const message = localErr?.response?.data?.error || localErr?.response?.data?.message || localErr.message;
+
+                console.warn("[invite:phase-3-local-workspace-member-not-created]", {
+                    workspaceId: currentWorkspace.id,
+                    email,
+                    status,
+                    message,
+                });
+
+                if (status === 404) {
+                    toast.success("Invitation sent. Member will be added after they create an account.");
+                } else if (status === 400 && message === "User is already a member") {
+                    await dispatch(fetchWorkspaces({ getToken })).unwrap();
+                    toast.success("Invitation sent. User is already a workspace member.");
+                } else {
+                    throw localErr;
+                }
+            }
+            setIsDialogOpen(false);
+        } catch (err) {
+            console.error("[invite:error]", err);
+            toast.error(err.response?.data?.message || err.message || "Something went wrong");
+        }
+        finally {
+            setIsSubmitting(false);
+        }
     };
 
     if (!isDialogOpen) return null;
@@ -60,8 +206,8 @@ const InviteMemberDialog = ({ isDialogOpen, setIsDialogOpen }) => {
                         <button type="button" onClick={() => setIsDialogOpen(false)} className="px-5 py-2 rounded text-sm border border-zinc-300 dark:border-zinc-700 text-zinc-900 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition" >
                             Cancel
                         </button>
-                        <button type="submit" disabled={isSubmitting || !currentWorkspace} className="px-5 py-2 rounded text-sm bg-gradient-to-br from-blue-500 to-blue-600 text-white disabled:opacity-50 hover:opacity-90 transition" >
-                            {isSubmitting ? "Sending..." : "Send Invitation"}
+                        <button type="submit" disabled={isSubmitting || isAligningWorkspace || !currentWorkspace || organization?.id !== currentWorkspace?.id} className="px-5 py-2 rounded text-sm bg-gradient-to-br from-blue-500 to-blue-600 text-white disabled:opacity-50 hover:opacity-90 transition" >
+                            {isSubmitting ? "Sending..." : isAligningWorkspace ? "Selecting..." : "Send Invitation"}
                         </button>
                     </div>
                 </form>

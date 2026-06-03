@@ -18,6 +18,18 @@ export const createTask = async (req, res) => {
 
     const origin = req.get("origin");
 
+    if (!projectId || !title?.trim()) {
+      return res.status(400).json({ message: "Project and title are required" });
+    }
+
+    if (!assigneeId) {
+      return res.status(400).json({ message: "Assignee is required" });
+    }
+
+    if (!due_date) {
+      return res.status(400).json({ message: "Due date is required" });
+    }
+
     // check if user has admin role for project
 
     const project = await prisma.project.findUnique({
@@ -41,12 +53,13 @@ export const createTask = async (req, res) => {
     const task = await prisma.task.create({
       data: {
         projectId,
-        title,
+        title: title.trim(),
         description,
+        type,
         priority,
         assigneeId,
         status,
-        due_date: due_date ? new Date(due_date) : null,
+        due_date: new Date(due_date),
       },
     });
 
@@ -65,7 +78,8 @@ export const createTask = async (req, res) => {
     });
     res.json({ task: taskWithAssignee, message: "Task created successfully" });
   } catch (error) {
-    res.status(500).json({ message: "Server error" });
+    console.error("[task:create:error]", error);
+    res.status(500).json({ message: error.message || "Server error" });
   }
 };
 

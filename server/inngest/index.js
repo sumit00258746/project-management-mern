@@ -5,6 +5,32 @@ import { Inngest } from "inngest";
 // Create a client to send and receive events
 export const inngest = new Inngest({ id: "project-management" });
 
+const mapClerkRole = (role) =>
+  role === "org:admin" || String(role).toLowerCase() === "admin"
+    ? "ADMIN"
+    : "MEMBER";
+
+const getPrimaryEmail = (data) =>
+  data?.public_user_data?.identifier ||
+  data?.email_address ||
+  data?.email_addresses?.[0]?.email_address ||
+  "";
+
+const getPublicUserName = (data, fallback) => {
+  const firstName = data?.public_user_data?.first_name || data?.first_name || "";
+  const lastName = data?.public_user_data?.last_name || data?.last_name || "";
+  return `${firstName} ${lastName}`.trim() || fallback || "User";
+};
+
+const getEventData = (event, eventName) => {
+  const payload = event?.data ?? event;
+  const data = payload?.data ?? payload;
+  if (!data || typeof data !== "object") {
+    throw new Error(`Missing event data for ${eventName}`);
+  }
+  return data;
+};
+
 const syncUserCreation = inngest.createFunction(
   {
     id: "sync-user-from-clerk",
@@ -12,11 +38,7 @@ const syncUserCreation = inngest.createFunction(
   },
   async ({ event }) => {
     console.log("Inngest clerk/user.created event:", event);
-    const payload = event?.data ?? event;
-    const data = payload?.data ?? payload;
-    if (!data || typeof data !== "object") {
-      throw new Error("Missing event data for clerk/user.created");
-    }
+    const data = getEventData(event, "clerk/user.created");
     await prisma.user.upsert({
       where: { id: data.id },
       create: {
@@ -40,11 +62,7 @@ const syncUserDeletion = inngest.createFunction(
   },
   async ({ event }) => {
     console.log("Inngest clerk/user.deleted event:", event);
-    const payload = event?.data ?? event;
-    const data = payload?.data ?? payload;
-    if (!data || typeof data !== "object") {
-      throw new Error("Missing event data for clerk/user.deleted");
-    }
+    const data = getEventData(event, "clerk/user.deleted");
     await prisma.user.delete({
       where: {
         id: data.id,
@@ -59,11 +77,7 @@ const syncUserUpdation = inngest.createFunction(
   },
   async ({ event }) => {
     console.log("Inngest clerk/user.updated event:", event);
-    const payload = event?.data ?? event;
-    const data = payload?.data ?? payload;
-    if (!data || typeof data !== "object") {
-      throw new Error("Missing event data for clerk/user.updated");
-    }
+    const data = getEventData(event, "clerk/user.updated");
     await prisma.user.update({
       where: {
         id: data.id,
@@ -86,11 +100,7 @@ const syncWorkspaceCreation = inngest.createFunction(
   },
   async ({ event }) => {
     console.log("Inngest clerk/organization.created event:", event);
-    const payload = event?.data ?? event;
-    const data = payload?.data ?? payload;
-    if (!data || typeof data !== "object") {
-      throw new Error("Missing event data for clerk/organization.created");
-    }
+    const data = getEventData(event, "clerk/organization.created");
     await prisma.workspace.upsert({
       where: { id: data.id },
       create: {
@@ -134,11 +144,7 @@ const syncWorkspaceUpdation = inngest.createFunction(
   },
   async ({ event }) => {
     console.log("Inngest clerk/organization.updated event:", event);
-    const payload = event?.data ?? event;
-    const data = payload?.data ?? payload;
-    if (!data || typeof data !== "object") {
-      throw new Error("Missing event data for clerk/organization.updated");
-    }
+    const data = getEventData(event, "clerk/organization.updated");
     await prisma.workspace.update({
       where: {
         id: data.id,
@@ -160,11 +166,7 @@ const syncWorkspaceDeletion = inngest.createFunction(
   },
   async ({ event }) => {
     console.log("Inngest clerk/organization.deleted event:", event);
-    const payload = event?.data ?? event;
-    const data = payload?.data ?? payload;
-    if (!data || typeof data !== "object") {
-      throw new Error("Missing event data for clerk/organization.deleted");
-    }
+    const data = getEventData(event, "clerk/organization.deleted");
     await prisma.workspace.delete({
       where: {
         id: data.id,
@@ -177,23 +179,97 @@ const syncWorkspaceDeletion = inngest.createFunction(
 const syncWorkspaceMemberCreation = inngest.createFunction(
   {
     id: "sync-workspace-member-from-clerk",
-    triggers: [{ event: "clerk/organization_invitation.accepted" }],
+    triggers: [
+      { event: "clerk/organizationMembership.created" },
+      { event: "clerk/organization_membership.created" },
+      { event: "clerk/organizationInvitation.accepted" },
+      { event: "clerk/organization_invitation.accepted" },
+    ],
   },
   async ({ event }) => {
-    console.log("Inngest clerk/organization_invitation.accepted event:", event);
-    const payload = event?.data ?? event;
-    const data = payload?.data ?? payload;
-    if (!data || typeof data !== "object") {
-      throw new Error(
-        "Missing event data for clerk/organization_invitation.accepted",
-      );
+    console.log("[inngest-workspace-member:phase-1-event-received]", {
+      eventName: event?.name,
+      eventId: event?.id,
+      rawData: event?.data,
+    });
+    const data = getEventData(event, "clerk workspace member sync");
+    const workspaceId = data.organization_id || data.organization?.id;
+    const email = getPrimaryEmail(data);
+    let userId = data.user_id || data.public_user_data?.user_id;
+
+    console.log("[inngest-workspace-member:phase-2-extracted-payload]", {
+      workspaceId,
+      userId,
+      email,
+      role: data.role || data.role_name,
+    });
+
+    if (!userId && email) {
+      console.log("[inngest-workspace-member:phase-3-user-id-missing-lookup-by-email:start]", {
+        email,
+      });
+      const existingUser = await prisma.user.findUnique({
+        where: { email },
+        select: { id: true },
+      });
+      userId = existingUser?.id;
+      console.log("[inngest-workspace-member:phase-3-user-id-missing-lookup-by-email:result]", {
+        email,
+        userId,
+      });
     }
-    await prisma.workspaceMember.create({
-      data: {
-        workspaceId: data.organization_id,
-        userId: data.user_id,
-        role: String(data.role_name).toUpperCase(),
+
+    if (!workspaceId || !userId) {
+      console.error("[inngest-workspace-member:phase-4-required-data-missing]", {
+        workspaceId,
+        userId,
+        email,
+        data,
+      });
+      throw new Error("Missing workspaceId or userId for workspace member sync");
+    }
+
+    const publicUserName = getPublicUserName(data, "");
+    const syncedUser = await prisma.user.upsert({
+      where: { id: userId },
+      create: {
+        id: userId,
+        name: publicUserName || email || "User",
+        email: email || `${userId}@clerk.local`,
+        image: data.public_user_data?.image_url || "",
       },
+      update: {
+        name: publicUserName || undefined,
+        email: email || undefined,
+        image: data.public_user_data?.image_url || undefined,
+      },
+    });
+    console.log("[inngest-workspace-member:phase-5-user-upsert:success]", {
+      userId: syncedUser.id,
+      email: syncedUser.email,
+    });
+
+    const syncedMember = await prisma.workspaceMember.upsert({
+      where: {
+        userId_workspaceId: {
+          userId,
+          workspaceId,
+        },
+      },
+      create: {
+        workspaceId,
+        userId,
+        role: mapClerkRole(data.role || data.role_name),
+      },
+      update: {
+        role: mapClerkRole(data.role || data.role_name),
+      },
+    });
+    console.log("[inngest-workspace-member:phase-6-member-upsert:success]", {
+      memberId: syncedMember.id,
+      userId: syncedMember.userId,
+      workspaceId: syncedMember.workspaceId,
+      role: syncedMember.role,
     });
   },
 );

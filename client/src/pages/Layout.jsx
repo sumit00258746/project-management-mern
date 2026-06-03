@@ -23,9 +23,13 @@ const Layout = () => {
     } = useOrganizationList({
         userMemberships: true,
     })
-    const clerkOrganizations = useMemo(
-        () => userMemberships.data?.map(({ organization }) => organization) || [],
+    const clerkMemberships = useMemo(
+        () => userMemberships.data || [],
         [userMemberships.data]
+    )
+    const clerkOrganizations = useMemo(
+        () => clerkMemberships.map(({ organization }) => organization),
+        [clerkMemberships]
     )
     const hasClerkOrganization = clerkOrganizations.length > 0
     // Initial load of theme
@@ -37,9 +41,13 @@ const Layout = () => {
     // initial load of user workspaces after the user has a Clerk organization
     useEffect(() => {
         if (isLoaded && userId && hasClerkOrganization) {
+            console.debug("[workspace-sync:phase-1-fetch-workspaces:start]", {
+                userId,
+                clerkOrganizationIds: clerkOrganizations.map((organization) => organization.id),
+            })
             dispatch(fetchWorkspaces({ getToken }))
         }
-    }, [dispatch, getToken, hasClerkOrganization, isLoaded, userId])
+    }, [clerkOrganizations, dispatch, getToken, hasClerkOrganization, isLoaded, userId])
 
     useEffect(() => {
         if (!isLoaded || !userId || !hasClerkOrganization) {
@@ -51,19 +59,52 @@ const Layout = () => {
             (organization) => !syncedWorkspaceIds.has(organization.id)
         )
 
+        console.debug("[workspace-sync:phase-2-compare-clerk-vs-db]", {
+            userId,
+            dbWorkspaceIds: [...syncedWorkspaceIds],
+            clerkOrganizationIds: clerkOrganizations.map((organization) => organization.id),
+            missingOrganizationIds: missingOrganizations.map((organization) => organization.id),
+        })
+
         missingOrganizations.forEach((organization) => {
+            const membership = clerkMemberships.find(
+                (item) => item.organization.id === organization.id
+            )
+
+            console.debug("[workspace-sync:phase-3-sync-missing-workspace:start]", {
+                userId,
+                organizationId: organization.id,
+                role: membership?.role,
+            })
+
             dispatch(syncClerkWorkspace({
                 getToken,
                 organization,
+                role: membership?.role,
                 user: {
                     fullName: userFullName,
                     email: userEmail,
                     imageUrl: userImageUrl,
                 },
-            }))
+            })).unwrap()
+                .then((workspace) => {
+                    console.debug("[workspace-sync:phase-4-sync-missing-workspace:success]", {
+                        userId,
+                        workspaceId: workspace?.id,
+                        memberCount: workspace?.members?.length,
+                    })
+                })
+                .catch((err) => {
+                    console.error("[workspace-sync:phase-4-sync-missing-workspace:error]", {
+                        userId,
+                        organizationId: organization.id,
+                        error: err?.response?.data || err?.message || err,
+                    })
+                })
         })
     }, [
         clerkOrganizations,
+        clerkMemberships,
         dispatch,
         getToken,
         hasClerkOrganization,

@@ -24,7 +24,9 @@ function WorkspaceDropdown() {
     const dispatch = useDispatch();
     const navigate = useNavigate();
 
-    const onSelectWorkspace = async (organization) => {
+    const onSelectWorkspace = async (membership) => {
+        const { organization } = membership;
+
         if (currentWorkspace?.id === organization.id) {
             setIsOpen(false);
             return;
@@ -38,6 +40,7 @@ function WorkspaceDropdown() {
             await dispatch(syncClerkWorkspace({
                 getToken,
                 organization,
+                role: membership.role,
                 user: {
                     fullName: user?.fullName,
                     email: user?.primaryEmailAddress?.emailAddress,
@@ -95,8 +98,11 @@ function WorkspaceDropdown() {
                         <p className="text-xs text-gray-500 dark:text-zinc-400 uppercase tracking-wider mb-2 px-2">
                             Workspaces
                         </p>
-                        {(userMemberships.data || []).map(({ organization: ws }) => (
-                            <div key={ws.id} onClick={() => onSelectWorkspace(ws)} className="flex items-center gap-3 p-2 cursor-pointer rounded hover:bg-gray-100 dark:hover:bg-zinc-800" >
+                        {(userMemberships.data || []).map((membership) => {
+                            const ws = membership.organization;
+
+                            return (
+                            <div key={ws.id} onClick={() => onSelectWorkspace(membership)} className="flex items-center gap-3 p-2 cursor-pointer rounded hover:bg-gray-100 dark:hover:bg-zinc-800" >
                                 <img src={ws.imageUrl} alt={ws.name} className="w-6 h-6 rounded" />
                                 <div className="flex-1 min-w-0">
                                     <p className="text-sm font-medium text-gray-800 dark:text-white truncate">
@@ -110,7 +116,8 @@ function WorkspaceDropdown() {
                                     <Check className="w-4 h-4 text-blue-600 dark:text-blue-400 flex-shrink-0" />
                                 )}
                             </div>
-                        ))}
+                            )
+                        })}
                     </div>
 
                     <hr className="border-gray-200 dark:border-zinc-700" />
